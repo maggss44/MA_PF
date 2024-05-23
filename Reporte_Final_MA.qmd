@@ -1,0 +1,411 @@
+```{r, message=FALSE}
+library(rstan)
+library(tidyverse)
+library(devtools) 
+library(rethinking)
+```
+
+```{r}
+# Datos
+data(reedfrogs)
+d <- reedfrogs
+
+# Crear la variable "tank cluster"
+d$tank <- 1:nrow(d)
+
+# Data
+head(d)
+```
+```{r}
+str(d)
+```
+```{r}
+summary(d)
+```
+
+### Efecto aleatorio del tanque centrado en 0
+```{r}
+# Stan model code
+stan_code_1 <- '
+data {
+  int<lower=1> N; // Número total de observaciones
+  int<lower=1> tank[N]; // Identificador del tanque para cada observación
+  int<lower=0> surv[N]; // Variable de supervivencia (0 o 1)
+  int<lower=0> density[N]; // Densidad de población en cada observación
+}
+
+parameters {
+  real a_tank_raw[N]; // Efecto aleatorio del tanque
+}
+
+transformed parameters {
+  real p[N]; // Probabilidad de supervivencia para cada observación
+
+  for (i in 1:N) {
+    p[i] = inv_logit(a_tank_raw[tank[i]]);
+  }
+}
+
+model {
+  // Prior para el efecto aleatorio del tanque
+  a_tank_raw ~ normal(0, 5);
+
+  // Likelihood
+  surv ~ binomial_logit(density, p);
+}
+'
+
+# Datos
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank
+)
+
+
+# Compilar el modelo
+stan_model <- stan_model(model_code = stan_code_1)
+
+# Ajustar el modelo a los datos
+fit_1 <- sampling(stan_model, data = data, iter = 4000, chains = 4)
+
+# Resultados
+print(fit_1)
+```
+```{r}
+# extract Stan samples
+post_1 <- extract.samples(fit_1)
+# compute median intercept for each tank
+# also transform to probability with logistic
+d$propsurv.est <- logistic( apply( post_1$a_tank_raw , 2 , median ) )
+```
+
+```{r}
+plot_1a <- {
+    # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+
+```
+```{r}
+# Simular 8000 nuevos tanques
+set.seed(123)
+new_tanks <- 8000
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = 0, sd = 5)
+  log_odds_survival[, i] <- a_tank_sample
+}
+
+plot_1b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival),
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+```{r}
+# Transformar log-odds a probabilidades de supervivencia
+logistic <- function(x) 1 / (1 + exp(-x))
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_1c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+### Efecto aleatorio específico para cada tanque
+```{r}
+# Stan model code
+stan_code_2 <- '
+data {
+  int<lower=0> N;            // Número de observaciones
+  int<lower=0> tank[N];      // Identificador del tanque
+  int<lower=0> surv[N];      // Número de supervivencias
+  int<lower=0> density[N];   // Densidad
+}
+
+parameters {
+  real a_tank;                    // Media del efecto aleatorio
+  real<lower=0> sigma_tank;       // Desviación estándar del efecto aleatorio
+  real a_tank_raw[N];// Efecto aleatorio específico de cada tanque (no centrado)
+}
+
+transformed parameters {
+  real<lower=0,upper=1> p[N]; // Probabilidad de supervivencia transformada
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_raw[i]);
+}
+
+model {
+  // Prior
+  a_tank ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+
+  // Efecto aleatorio específico de cada tanque (no centrado)
+  for (i in 1:N)
+    a_tank_raw[i] ~ normal(a_tank, sigma_tank);
+
+  // Likelihood
+  for (i in 1:N)
+    surv[i] ~ binomial(density[i], p[i]);
+}
+'
+
+# Datos
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank
+)
+
+
+# Compilar el modelo
+stan_model <- stan_model(model_code = stan_code_2)
+
+# Ajustar el modelo a los datos
+fit_2 <- sampling(stan_model, data = data, iter = 4000, chains = 4)
+
+# Resultados
+print(fit_2)
+```
+
+```{r}
+# extract Stan samples
+post_2 <- extract.samples(fit_2)
+# compute median intercept for each tank
+# also transform to probability with logistic
+d$propsurv.est <- logistic( apply( post_2$a_tank_raw , 2 , median ) )
+```
+
+```{r}
+plot_2a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+
+```
+```{r}
+# Simular 8000 nuevos tanques
+set.seed(123)
+new_tanks <- 8000
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post$a_tank[i], sd = post$sigma_tank[i])
+  log_odds_survival[, i] = a_tank_sample
+}
+
+plot_2b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+
+```{r}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_2c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+### Efecto aleatorio específico para cada tanque y tamaño (no centrado)
+```{r}
+stan_code_3 <- '
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+'
+
+# Data
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank,
+  size = as.integer(d$size == "big") + 1  # Convert "big" to 1 and "small" to 2
+)
+
+# Compile the model
+stan_model <- stan_model(model_code = stan_code_3)
+
+# Fit the model to the data with higher adapt_delta
+fit_3 <- sampling(stan_model, data = data, iter = 4000, chains = 4, 
+                control = list(adapt_delta = 0.99))
+
+# Results
+print(fit_3)
+```
+
+```{r}
+# Extraer muestras de Stan
+post_3 <- extract.samples(fit_3)
+
+# Calcular la estimación combinada para cada observación
+# Aquí se utilizan tanto el efecto aleatorio del tanque como del tamaño
+d$propsurv.est <- apply(post_3$a_tank_adjusted, 2, median) + 
+  apply(post_3$a_size_adjusted, 2, median)[d$size]
+
+# Transformar a probabilidad utilizando la función logística
+d$propsurv.est <- logistic(d$propsurv.est)
+```
+
+```{r}
+plot_3a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+
+```
+
+```{r}
+# Simular 8000 nuevos tanques con tamaños aleatorios
+set.seed(123)
+new_tanks <- 8000
+new_sizes <- sample(1:2, new_tanks, replace = TRUE)
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post$a_tank[i], sd = post$sigma_tank[i])
+  a_size_sample <- rnorm(new_tanks, mean = post$a_size[i], sd = post$sigma_size[i])
+  log_odds_survival[, i] <- a_tank_sample + a_size_sample[new_sizes]
+}
+
+plot_3b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+```{r}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_3c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
