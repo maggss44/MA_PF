@@ -1,8 +1,11 @@
+
 ```{r, message=FALSE}
 library(rstan)
 library(tidyverse)
 library(devtools) 
 library(rethinking)
+library(coda)
+library(DiagrammeR)
 ```
 
 ```{r}
@@ -23,9 +26,23 @@ str(d)
 summary(d)
 ```
 
-### Efecto aleatorio del tanque centrado en 0
+### Intercepto específico por tanque SIN calculo de varianza entre tanques
+
 ```{r}
-# Stan model code
+grViz("
+digraph {
+  graph [ranksep = 0.2, rankdir = LR]
+  node [shape=plaintext]
+  T
+  edge [minlen = 3]
+  T -> P
+}
+", width = 200)
+
+```
+
+```{r}
+# Stan model code with log-likelihood extraction and deviance
 stan_code_1 <- '
 data {
   int<lower=1> N; // Número total de observaciones
@@ -53,6 +70,17 @@ model {
   // Likelihood
   surv ~ binomial_logit(density, p);
 }
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[tank[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
 '
 
 # Datos
@@ -63,7 +91,6 @@ data <- list(
   tank = d$tank
 )
 
-
 # Compilar el modelo
 stan_model <- stan_model(model_code = stan_code_1)
 
@@ -73,6 +100,12 @@ fit_1 <- sampling(stan_model, data = data, iter = 4000, chains = 4)
 # Resultados
 print(fit_1)
 ```
+
+```{r}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_1)
+```
+
 ```{r}
 # extract Stan samples
 post_1 <- extract.samples(fit_1)
@@ -89,7 +122,7 @@ plot_1a <- {
   points(d$propsurv.est, col="red")
   
   # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
-  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  abline(h=logistic(median(post_1$a_tank + post_1$a_size)), lty=2)
   
   # Dibujar divisores verticales entre los tamaños de tanque
   abline(v=c(16.5, 32.5), lwd=0.5)
@@ -140,7 +173,21 @@ plot_1c <- {
 
 ```
 
-### Efecto aleatorio específico para cada tanque
+### Intercepto específico por tanque CON calculo de varianza entre tanques
+
+```{r}
+grViz("
+digraph {
+  graph [ranksep = 0.2, rankdir = LR]
+  node [shape=plaintext]
+  T
+  edge [minlen = 3]
+  T -> P
+}
+", width = 200)
+
+```
+
 ```{r}
 # Stan model code
 stan_code_2 <- '
@@ -176,6 +223,17 @@ model {
   for (i in 1:N)
     surv[i] ~ binomial(density[i], p[i]);
 }
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[i]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
 '
 
 # Datos
@@ -198,6 +256,11 @@ print(fit_2)
 ```
 
 ```{r}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_2)
+```
+
+```{r}
 # extract Stan samples
 post_2 <- extract.samples(fit_2)
 # compute median intercept for each tank
@@ -214,7 +277,7 @@ plot_2a <- {
   points(d$propsurv.est, col="red")
   
   # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
-  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  abline(h=logistic(median(post_2$a_tank + post_2$a_size)), lty=2)
   
   # Dibujar divisores verticales entre los tamaños de tanque
   abline(v=c(16.5, 32.5), lwd=0.5)
@@ -232,7 +295,7 @@ new_tanks <- 8000
 # Calcular log-odds de supervivencia para estos tanques
 log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
 for (i in 1:100) {
-  a_tank_sample <- rnorm(new_tanks, mean = post$a_tank[i], sd = post$sigma_tank[i])
+  a_tank_sample <- rnorm(new_tanks, mean = post_2$a_tank[i], sd = post_2$sigma_tank[i])
   log_odds_survival[, i] = a_tank_sample
 }
 
@@ -264,7 +327,24 @@ plot_2c <- {
 }
 
 ```
-### Efecto aleatorio específico para cada tanque y tamaño (no centrado)
+
+
+### Intercepto específico por tanque y tamaño CON calculo de la varianza entre tanques y tamaño
+```{r}
+grViz("
+digraph {
+  graph [ranksep = 0.2, rankdir = LR]
+  node [shape=plaintext]
+  T
+  S
+  edge [minlen = 3]
+  T -> P
+  S -> P
+}
+", width = 200)
+
+```
+
 ```{r}
 stan_code_3 <- '
 data {
@@ -312,6 +392,17 @@ model {
   // Likelihood
   surv ~ binomial(density, p);
 }
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
 '
 
 # Data
@@ -332,6 +423,10 @@ fit_3 <- sampling(stan_model, data = data, iter = 4000, chains = 4,
 
 # Results
 print(fit_3)
+```
+```{r}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_3)
 ```
 
 ```{r}
@@ -356,7 +451,7 @@ plot_3a <- {
   points(d$propsurv.est, col="red")
   
   # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
-  abline(h=logistic(median(post$a_tank + post$a_size)), lty=2)
+  abline(h=logistic(median(post_3$a_tank + post_3$a_size)), lty=2)
   
   # Dibujar divisores verticales entre los tamaños de tanque
   abline(v=c(16.5, 32.5), lwd=0.5)
@@ -376,8 +471,8 @@ new_sizes <- sample(1:2, new_tanks, replace = TRUE)
 # Calcular log-odds de supervivencia para estos tanques
 log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
 for (i in 1:100) {
-  a_tank_sample <- rnorm(new_tanks, mean = post$a_tank[i], sd = post$sigma_tank[i])
-  a_size_sample <- rnorm(new_tanks, mean = post$a_size[i], sd = post$sigma_size[i])
+  a_tank_sample <- rnorm(new_tanks, mean = post_3$a_tank[i], sd = post_3$sigma_tank[i])
+  a_size_sample <- rnorm(new_tanks, mean = post_3$a_size[i], sd = post_3$sigma_size[i])
   log_odds_survival[, i] <- a_tank_sample + a_size_sample[new_sizes]
 }
 
@@ -409,3 +504,320 @@ plot_3c <- {
 
 ```
 
+### Intercepto específico por tanque, tamaño y presencia de depredadores CON 
+### calculo de la varianza entre tanques, tamaño y presencia de depredadores
+```{r}
+grViz("
+digraph {
+  graph [ranksep = 0.2, rankdir = LR]
+  node [shape=plaintext]
+  T
+  S
+  D
+  edge [minlen = 3]
+  T -> P
+  S -> P
+  D -> P
+}
+", width = 200)
+
+```
+```{r}
+stan_code_4 <- '
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+  int<lower=1, upper=2> pred[N];// Size identifier:1 for "no" and 2 for "pred" 
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real a_pred;                    // Mean of the random effect for predator
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  real<lower=0> sigma_pred;  // Standard deviation of the random effect for pred
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+  vector[2] a_pred_raw;   // Raw random effect for each pred level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real a_pred_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+  for (i in 1:2)
+    a_pred_adjusted[i] = a_pred + sigma_pred * a_pred_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + a_pred_adjusted[pred[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  a_pred ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+  sigma_pred ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+  a_pred_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + a_pred_adjusted[pred[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+'
+
+# Data
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank,
+  size = as.integer(d$size == "big") + 1,  # Convert "big" to 1 and "small" to 2
+  pred = as.integer(d$pred == "no") + 1  # Convert "no" to 1 and "pred" to 2
+)
+
+# Compile the model
+stan_model <- stan_model(model_code = stan_code_4)
+
+# Fit the model to the data with higher adapt_delta
+fit_4 <- sampling(stan_model, data = data, iter = 3500, chains = 4, 
+                control = list(adapt_delta = 0.99))
+
+# Results
+print(fit_4)
+```
+
+```{r}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_4)
+```
+
+```{r}
+# Extraer muestras de Stan
+post_4 <- extract.samples(fit_4)
+
+# Calcular la estimación combinada para cada observación
+# Aquí se utilizan tanto el efecto aleatorio del tanque como del tamaño
+d$propsurv.est <- apply(post_4$a_tank_adjusted, 2, median) + 
+  apply(post_4$a_size_adjusted, 2, median)[d$size] +
+  apply(post_4$a_pred_adjusted, 2 ,median)[d$pred]
+
+# Transformar a probabilidad utilizando la función logística
+d$propsurv.est <- logistic(d$propsurv.est)
+```
+
+```{r}
+plot_4a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post_4$a_tank + post_4$a_size + post_4$a_pred)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+
+```
+
+```{r}
+# Simular 8000 nuevos tanques con tamaños aleatorios
+set.seed(123)
+new_tanks <- 8000
+new_sizes <- sample(1:2, new_tanks, replace = TRUE)
+new_preds <- sample(1:2, new_tanks, replace = TRUE)
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post_4$a_tank[i], sd = post_4$sigma_tank[i])
+  a_size_sample <- rnorm(new_sizes, mean = post_4$a_size[i], sd = post_4$sigma_size[i])
+  a_pred_sample <- rnorm(new_preds, mean = post_4$a_pred[i], sd = post_4$sigma_pred[i])
+  log_odds_survival[, i] <- a_tank_sample + a_size_sample[new_sizes] + a_pred_sample[new_preds]
+}
+
+plot_4b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+```{r}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_4c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+
+```
+
+### Comparación de modelos (DIC)
+```{r}
+# Extraer las muestras del ajuste del modelo usando rstan::extract
+samples <- rstan::extract(fit_1)
+
+# Extraer las devianzas
+deviance_samples <- samples$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar <- mean(deviance_samples)
+
+# Calcular la devianza del valor esperado de los parámetros posteriori
+a_tank_raw_mean <- apply(samples$a_tank_raw, 2, mean)
+
+# Calcular la log-verosimilitud del valor esperado de los parámetros
+log_lik_mean <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  # Calcular la probabilidad predicha usando el valor medio de a_tank_raw
+  p_mean <- 1 / (1 + exp(-a_tank_raw_mean[data$tank[i]]))
+  # Calcular la log-verosimilitud
+  log_lik_mean[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar <- -2 * sum(log_lik_mean)
+
+# Calcular DIC
+DIC_1 <- 2 * D_bar - D_theta_bar
+
+# Extraer muestras del ajuste del modelo
+samples_2 <- rstan::extract(fit_2)
+
+# Extraer las devianzas
+deviance_samples_2 <- samples_2$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_2 <- mean(deviance_samples_2)
+
+# Calcular la devianza del valor esperado de los parámetros posteriori
+a_tank_raw_mean_2 <- apply(samples_2$a_tank_raw, 2, mean)
+log_lik_mean_2 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-a_tank_raw_mean_2[i]))
+  log_lik_mean_2[i] <- dbinom(data$surv[i], size = data$density[i], 
+                              prob = p_mean, log = TRUE)
+}
+D_theta_bar_2 <- -2 * sum(log_lik_mean_2)
+
+# Calcular DIC
+DIC_2 <- 2 * D_bar_2 - D_theta_bar_2
+
+# Extraer muestras del ajuste del modelo
+samples_3 <- rstan::extract(fit_3)
+
+# Extraer las devianzas
+deviance_samples_3 <- samples_3$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_3 <- mean(deviance_samples_3)
+
+# Calcular la devianza del valor esperado de los parámetros posteriores
+a_tank_adjusted_mean_3 <- apply(samples_3$a_tank_adjusted, 2, mean)
+a_size_adjusted_mean_3 <- apply(samples_3$a_size_adjusted, 2, mean)
+log_lik_mean_3 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-(a_tank_adjusted_mean_3[data$tank[i]] + a_size_adjusted_mean_3[data$size[i]])))
+  log_lik_mean_3[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar_3 <- -2 * sum(log_lik_mean_3)
+
+# Calcular DIC
+DIC_3 <- 2 * D_bar_3 - D_theta_bar_3
+
+# Extraer muestras del ajuste del modelo
+samples_4 <- rstan::extract(fit_4)
+
+# Extraer las devianzas
+deviance_samples_4 <- samples_4$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_4 <- mean(deviance_samples_4)
+
+# Calcular la devianza del valor esperado de los parámetros posteriores
+a_tank_adjusted_mean_4 <- apply(samples_4$a_tank_adjusted, 2, mean)
+a_size_adjusted_mean_4 <- apply(samples_4$a_size_adjusted, 2, mean)
+a_pred_adjusted_mean_4 <- apply(samples_4$a_pred_adjusted, 2, mean)
+log_lik_mean_4 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-(a_tank_adjusted_mean_4[data$tank[i]] + a_size_adjusted_mean_4[data$size[i]]+ a_pred_adjusted_mean_4[data$pred[i]])))
+  log_lik_mean_4[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar_4 <- -2 * sum(log_lik_mean_4)
+
+# Calcular DIC
+DIC_4 <- 2 * D_bar_4 - D_theta_bar_4
+
+# Crear un data frame con los valores de DIC y el modelo correspondiente
+dic_data_1 <- data.frame(
+  Modelo = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4"),
+  DIC = c(DIC_1, DIC_2, DIC_3, DIC_4)
+)
+
+# Graficar los valores de DIC
+ggplot(dic_data_1, aes(x = Modelo, y = DIC, fill = Modelo)) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(title = "Comparación de DIC entre modelos",
+       x = "Modelo",
+       y = "DIC") +
+  theme_minimal()
+```
+
+```{r}
+# Crear un data frame con los valores de DIC y el modelo correspondiente
+dic_data_2 <- data.frame(
+  Modelo = c("Modelo 2", "Modelo 3", "Modelo 4"),
+  DIC = c(DIC_2, DIC_3, DIC_4)
+)
+
+# Graficar los valores de DIC
+ggplot(dic_data_2, aes(x = Modelo, y = DIC, fill = Modelo)) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(title = "Comparación de DIC entre modelos",
+       x = "Modelo",
+       y = "DIC") +
+  geom_text(aes(label = DIC), vjust = -0.5, color = "black", size = 4) +  # Agregar etiquetas de valores DIC +
+  theme_minimal()
+```
