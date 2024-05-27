@@ -1,0 +1,1458 @@
+---
+title: "Proyecto Final"
+subtitle: "Métodos Analíticos" 
+editor: visual 
+author: 
+  - "Arturo Santiago Sánchez - 208796"
+  - "Minor Lara Adolfo Erwin - 214601"
+  - "Carlos Guillermo Mayxorga Tapia - 149617"
+format:
+  pdf:
+    include-in-header: 
+      text: |
+        \addtokomafont{disposition}{\rmfamily} 
+prefer-html: true
+execute:
+  echo: false
+---
+
+```{r librerias, echo=FALSE, message=FALSE, warning=FALSE}
+library(rstan)
+library(tidyverse)
+library(devtools) 
+library(rethinking)
+library(coda)
+library(DiagrammeR)
+library(ggplot2)
+library(webshot)
+library(kableExtra)
+theme_set(theme_minimal())
+```
+
+# Introducción
+
+Los modelos multinivel, también conocidos como modelos jerárquicos o modelos de efectos mixtos, son una clase de modelos estadísticos que permiten analizar datos que tienen una estructura jerárquica o anidada. Estos modelos son particularmente útiles en situaciones donde las observaciones dentro de un mismo grupo pueden estar más correlacionadas entre sí que con observaciones de otros grupos.
+
+## Definición
+
+En un modelo multinivel, las variables pueden operar en diferentes niveles de la jerarquía. Por ejemplo, en un estudio de educación, podemos tener variables a nivel del estudiante, como el rendimiento académico, y variables a nivel de la escuela, como el tamaño de la escuela o los recursos disponibles. Los modelos multinivel permiten que estos niveles de datos interactúen de manera que se capture adecuadamente la estructura de la variabilidad en los datos. Algunas características son las siguientes:
+
+-   Son modelos de regresión que incorporan efectos de grupos específicos; estos grupos representan diferentes niveles de jerarquía (hierarchy).
+
+-   Recuerdan características de cada grupo en los datos, a medida que aprenden sobre todos los grupos. 
+
+-   Dependiendo de la variación entre los grupos, el modelo agrega información entre grupos.
+
+-   Esta agrupación tiende a mejorar las estimaciones sobre cada grupo.
+
+## Ventajas
+
+-   **Estimaciones mejoradas para muestreo / observación repetida**: uando surge más de una observación del mismo individuo, ubicación o tiempo, entonces los modelos tradicionales de un solo nivel tienen a maximizar el sobreajuste o subajuste de los datos.
+
+-   **Estimaciones mejoradas para el clases desequilibradas en el muestreo**: Cuando algunas personas, lugares o veces se muestrean más que otras, los modelos multinivel hacen frente mediante incertidumbre diferenciada a través  estos grupos. Esto evita que los clusters sobremuestreados dominen injustamente la inferencia.
+
+-   **Estimaciones de variación:** Si nuestras preguntas de investigación incluyen variación entre individuos u otros grupos dentro de los datos, entonces los modelos multinivel son de gran ayuda, porque modelan la variación explícitamente.
+
+-   **Preservar la incertidumbre y evitar transformaciones de datos:** Con frecuencia, se promedian previamente algunos datos para construir variables. Esto puede ser peligroso, porque el promedio elimina la variación, además de que existen varias formas diferentes de realizar el promedio lo cual genera una falsa confianza e introduce transformaciones de datos arbitrarias.
+
+# Objetivo
+
+Para ilustrar la utilidad de los modelos multinivel, consideremos un ejemplo clásico de la biología: la supervivencia de renacuajos en diferentes tanques. Supongamos que estamos estudiando la supervivencia de renacuajos en una serie de tanques experimentales, donde cada tanque representa un ambiente controlado diferente. En este contexto, los tanques serían los grupos (nivel 2) y los renacuajos las unidades dentro de cada grupo (nivel 1).
+
+El objetivo de este estudio es aplicar modelos estadísticos multinivel para analizar la mortalidad de los renacuajos de la rana junco (Hyperolius spinigularis) en diferentes tanques experimentales. Este enfoque permite:
+
+-   **Recordar información previa**: Aprovechar la información de cada grupo (o clúster) durante el proceso de modelado, en lugar de tratar cada grupo de forma independiente sin aprender de los demás.
+-   **Mejorar las estimaciones**: Realizar estimaciones más precisas mediante la agregación de información entre los diferentes grupos, lo cual tiende a mejorar las estimaciones sobre cada grupo individualmente.
+-   **Modelar la variación entre grupos**: Capturar la variabilidad intrínseca entre los tanques, proporcionando una mejor comprensión de los factores que afectan la supervivencia de los renacuajos.
+-   **Evitar el sobreajuste**: Reducir el riesgo de sobreajuste en tanques con menos observaciones mediante el uso de pooling parcial de la información.
+
+Este estudio busca demostrar cómo los modelos multinivel pueden proporcionar una herramienta robusta y flexible para el análisis de datos jerárquicos en estudios biológicos, mejorando la precisión y la generalización de las conclusiones obtenidas.
+
+# Datos
+
+La base de datos cuenta con 48 observaciones, cada una de ella representa un tanque que contiene a los renacuajos.
+
+Las variables son las siguientes:
+
+-   **density**: La densidad de renacuajos por tanque, el número inicial de renacuajos.
+
+-   **pred**: Indicador de si hay o no un depredador presente.
+
+-   **size**: Tamaño del grupo de renacuajos, clasificado como 'big' o 'small'.
+
+-   **surv**: Número de renacuajos que sobrevivieron.
+
+-   **propsurv**: Proporción de renacuajos que sobrevivieron.
+
+-   **tank**: Identificador del tanque.
+
+```{r data, echo=FALSE}
+# Datos
+data(reedfrogs)
+d <- reedfrogs
+
+# Crear la variable "tank cluster"
+d$tank <- 1:nrow(d)
+
+# Dara
+d %>%
+  head() %>%
+  kable(caption = "Tabla de los primeros registros del conjunto de datos reedfrogs", 
+        booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+## Resumen Estadístico y Distribución de Variables Categóricas y Numéricas
+
+Variables Numéricas
+
+-   **density**: Varía entre 10 y 35, lo que sugiere distintos tamaños de grupos de renacuajos.
+
+-   **surv** (Supervivencia): El número de renacuajos que sobreviven varía bastante, desde un mínimo de 4 hasta un máximo de 35, con una media de 16.31.
+
+-   **propsurv** (Proporción de Supervivencia): La proporción de supervivencia promedio es de aproximadamente 0.72, pero con una variación considerable (desde 0.11 hasta 1.00).
+
+## Variables categóricas
+
+-   **pred** (Presencia de Depredador): Los datos están equilibradamente divididos entre presencia y ausencia de depredadores (24 registros cada uno).
+
+-   **size** (Tamaño): También hay un balance entre grupos clasificados como 'big' y 'small' (24 registros cada uno).
+
+```{r var_categorial, echo=FALSE, fig.align='center'}
+# Boxplot
+ggplot(d, aes(x = pred, y = surv)) +
+  geom_boxplot(fill = "dodgerblue2") +
+  labs(title = "Boxplot of Survival by Predaator Presence")
+```
+
+```{r var_categorial_2, echo=FALSE, fig.align='center'}
+# Boxplot
+ggplot(d, aes(x = size, y = surv)) +
+  geom_boxplot(fill = "springgreen4") +
+  labs(title = "Boxplot of Survival by Size")
+```
+
+\newpage
+
+# Modelos
+
+## Modelo 1: Intercepto específico por tanque SIN cálculo de varianza entre tanques
+
+En este primer modelo, cada tanque tiene un intercepto específico, permite que la tasa de supervivencia inicial varíe entre tanques. No calcula la varianza entre los interceptos de los tanques, no toma en cuenta la variación de los interceptos entre los tanques.
+
+```{r diagraph1, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+grViz("
+digraph {
+  graph [rankdir = LR, margin = 0, pad = 0, nodesep = 0.1, ranksep = 0.1]
+  node [shape = plaintext]
+  T
+  edge [minlen = 3]
+  T -> P
+}
+", engine = "dot")
+```
+
+Suponemos lo siguiente:
+
+1.  Variable respuesta:
+    -   $surv_i \sim \text{Binomial}(density_i, p_i)$, donde:
+        -   $surv_i$: variable de supervivencia para la observación $i$
+        -   $density_i$: densidad de población (número de ensayos) para la observación $i$
+        -   $p_i$: probabilidad de supervivencia para la observación $i$
+2.  Función de enlace:
+    -   $\text{logit}(p_i) = a\_tank\_raw[tank[i]]$, donde:
+        -   $a\_tank\_raw[tank[i]]$: efecto aleatorio del tanque correspondiente a la observación $i$
+3.  Efecto aleatorio del tanque:
+    -   $a\_tank\_raw \sim \text{Normal}(0, 5)$, donde:
+        -   $a\_tank\_raw$: vector de efectos aleatorios de los tanques
+        -   $0$: media de la distribución normal
+        -   $5$: desviación estándar de la distribución normal
+
+Estos supuestos implican que:
+
+-   La variable de respuesta $surv_i$ sigue una distribución binomial, donde el número de ensayos está determinado por la densidad de población $density_i$ y la probabilidad de éxito (supervivencia) $p_i$ varía según el tanque.
+
+-   La probabilidad de supervivencia $p_i$ está relacionada con el efecto aleatorio del tanque correspondiente a través de una función de enlace logit.
+
+-   Los efectos aleatorios de los tanques $a\_tank\_raw$ siguen una distribución normal con media 0 y desviación estándar 5, lo que permite variabilidad entre los tanques.
+
+El modelo es el siguiente:
+
+``` text
+data {
+  int<lower=1> N; // Número total de observaciones
+  int<lower=1> tank[N]; // Identificador del tanque para cada observación
+  int<lower=0> surv[N]; // Variable de supervivencia (0 o 1)
+  int<lower=0> density[N]; // Densidad de población en cada observación
+}
+
+parameters {
+  real a_tank_raw[N]; // Efecto aleatorio del tanque
+}
+
+transformed parameters {
+  real p[N]; // Probabilidad de supervivencia para cada observación
+
+  for (i in 1:N) {
+    p[i] = inv_logit(a_tank_raw[tank[i]]);
+  }
+}
+
+model {
+  // Prior para el efecto aleatorio del tanque
+  a_tank_raw ~ normal(0, 5);
+
+  // Likelihood
+  surv ~ binomial_logit(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[tank[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+```
+
+```{r model1, echo=FALSE, include=FALSE}
+# Stan model code with log-likelihood extraction and deviance
+stan_code_1 <- '
+data {
+  int<lower=1> N; // Número total de observaciones
+  int<lower=1> tank[N]; // Identificador del tanque para cada observación
+  int<lower=0> surv[N]; // Variable de supervivencia (0 o 1)
+  int<lower=0> density[N]; // Densidad de población en cada observación
+}
+
+parameters {
+  real a_tank_raw[N]; // Efecto aleatorio del tanque
+}
+
+transformed parameters {
+  real p[N]; // Probabilidad de supervivencia para cada observación
+
+  for (i in 1:N) {
+    p[i] = inv_logit(a_tank_raw[tank[i]]);
+  }
+}
+
+model {
+  // Prior para el efecto aleatorio del tanque
+  a_tank_raw ~ normal(0, 5);
+
+  // Likelihood
+  surv ~ binomial_logit(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[tank[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+'
+
+# Datos
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank
+)
+
+# Compilar el modelo
+stan_model <- stan_model(model_code = stan_code_1)
+
+# Ajustar el modelo a los datos
+fit_1 <- sampling(stan_model, data = data, iter = 4000, chains = 4)
+```
+
+Los resultados se encuentran en los anexos.
+
+Los traceplots de los parámetros se encuentran en la siguiente gráfica:
+
+```{r traceplot1, echo=FALSE}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_1)
+```
+
+Todos estos parámetros fueron modelados bajo las mismas condiciones y priors. La escala uniforme en el eje Y de estos traceplots se debe a las condiciones de modelado consistentes y las distribuciones comunes de los parámetros $a\_tank\_raw_i$, lo que resulta en rangos de valores similares para cada uno de estos parámetros.
+
+Posteriormente, se procedió a extraer las muestras posteriores del modelo **`fit_1`** para calcular la mediana de los interceptos para cada tanque. Estos interceptos fueron transformados a probabilidades utilizando la función logística. Este proceso permitió estimar las probabilidades de supervivencia ajustadas para cada tanque en el estudio.
+
+```{r post1, echo=FALSE, include=FALSE}
+# extract Stan samples
+post_1 <- extract.samples(fit_1)
+# compute median intercept for each tank
+# also transform to probability with logistic
+d$propsurv.est <- logistic( apply( post_1$a_tank_raw , 2 , median ) )
+```
+
+Ahora se comparan las proporciones de supervivencia observadas y las estimadas para cada tanque. Los puntos azules representan las proporciones observadas, mientras que los puntos rojos indican las estimaciones del modelo.
+
+```{r comp1, echo=FALSE}
+plot_1a <- {
+    # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", ylab="proportion survival", col="dodgerblue2")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post_1$a_tank + post_1$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+```
+
+A pesar de que el modelo capta algunas tendencias generales en los datos, hay discrepancias significativas entre las proporciones observadas y estimadas en todos los tamaños de tanques. En los tanques pequeños, el modelo subestima consistentemente la alta supervivencia observada. En los tanques medianos y grandes, el modelo no captura completamente la variabilidad, lo que lleva a estimaciones que son frecuentemente más bajas que las proporciones observadas.
+
+Para evaluar la variabilidad en la supervivencia de los tanques, se simuló la supervivencia en 8000 tanques nuevos. La siguiente gráfica muestra las distribuciones gaussianas de los log-odds de supervivencia para 100 muestras diferentes, lo cual permite visualizar la variabilidad en las estimaciones de log-odds de supervivencia entre los tanques simulados.
+
+```{r log_odds1, echo=FALSE}
+# Simular 8000 nuevos tanques
+set.seed(123)
+new_tanks <- 8000
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = 0, sd = 5)
+  log_odds_survival[, i] <- a_tank_sample
+}
+
+plot_1b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival),
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+En la gráfica anterior observamos lo siguiente:
+
+-   **Distribución Centralizada**: Distribución centrada alrededor de 0, consistente con una distribución normal de los efectos aleatorios.
+
+-   **Extremos en Log-Odds**: Los valores de log-odds se extienden bastante en ambos extremos, refleja la varianza en las probabilidades de supervivencia. Los log-odds extremos corresponden a probabilidades de supervivencia muy cercanas a 0 o 1.
+
+Finalmente, las distribuciones de log-odds de supervivencia fueron transformadas a probabilidades de supervivencia. La siguiente gráfica ilustra las densidades de estas probabilidades para 100 muestras diferentes, proporcionando una perspectiva clara de la distribución de las probabilidades de supervivencia en los tanques simulados.
+
+```{r survival_probs_1, echo=FALSE}
+# Transformar log-odds a probabilidades de supervivencia
+logistic <- function(x) 1 / (1 + exp(-x))
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_1c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+Podemos notar que:
+
+-   **Distribución Bimodal:** Con picos cerca de 0 y 1. Esto indica que las observaciones tienden a agruparse en extremos opuestos, es decir, hay una alta probabilidad de que la supervivencia sea cercana al 0% o al 100%.
+
+-   **Densidad**: La densidad en el eje Y muestra cuántas observaciones se encuentran en cada rango de probabilidad. Los picos en los extremos indican que hay muchas observaciones con probabilidades de supervivencia muy bajas o muy altas.
+
+\newpage
+
+## Modelo 2: Intercepto específico por tanque CON calculo de varianza entre tanques
+
+Este modelo captura la variabilidad entre tanques mediante efectos aleatorios y estima la probabilidad de supervivencia en función de la densidad de población. 
+
+\
+Los efectos aleatorios específicos de cada tanque se modelan con una media común $a_{tank}$ y una desviación estándar $sigma_{tank}$, permitiendo capturar la heterogeneidad entre tanques.
+
+```{r diagraph2, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+grViz("
+digraph {
+  graph [rankdir = LR, margin = 0, pad = 0, nodesep = 0.1, ranksep = 0.1]
+  node [shape = plaintext]
+  T
+  edge [minlen = 3]
+  T -> P
+}
+", engine = "dot")
+```
+
+Suponemos lo siguiente:
+
+1.  Variable respuesta:
+    -   $surv_i \sim \text{Binomial}(density_i, p_i)$, donde:
+        -   $surv_i$: número de supervivencias para la observación $i$
+        -   $density_i$: densidad de población (número de ensayos) para la observación $i$
+        -   $p_i$: probabilidad de supervivencia para la observación $i$
+2.  Función de enlace:
+    -   $\text{logit}(p_i) = a\_tank\_raw[i]$, donde:
+        -   $a\_tank\_raw[i]$: efecto aleatorio específico del tanque correspondiente a la observación $i$
+3.  Efecto aleatorio específico del tanque:
+    -   $a\_tank\_raw[i] \sim \text{Normal}(a\_tank, \sigma\_tank)$, donde:
+        -   $a\_tank$: media del efecto aleatorio
+        -   $\sigma\_tank$: desviación estándar del efecto aleatorio
+4.  Priors:
+    -   $a\_tank \sim \text{Normal}(0, 1)$
+    -   $\sigma\_tank \sim \text{Cauchy}(0, 1)$
+
+Estos supuestos implican que:
+
+-   La variable de respuesta $surv_i$ sigue una distribución binomial, donde el número de ensayos está determinado por la densidad de población $density_i$ y la probabilidad de éxito (supervivencia) $p_i$ varía según el efecto aleatorio específico del tanque.
+
+-   La probabilidad de supervivencia $p_i$ está relacionada con el efecto aleatorio específico del tanque $a\_tank\_raw[i]$ a través de una función de enlace logit.
+
+-   Los efectos aleatorios específicos de los tanques $a\_tank\_raw[i]$ siguen una distribución normal con media $a\_tank$ y desviación estándar $\sigma\_tank$, lo que permite variabilidad entre los tanques.
+
+-   La media del efecto aleatorio $a\_tank$ tiene una distribución normal prior con media 0 y desviación estándar 1.
+
+-   La desviación estándar del efecto aleatorio $\sigma\_tank$ tiene una distribución Cauchy prior con ubicación 0 y escala 1.
+
+El modelo es el siguiente:
+
+``` text
+data {
+  int<lower=0> N;            // Número de observaciones
+  int<lower=0> tank[N];      // Identificador del tanque
+  int<lower=0> surv[N];      // Número de supervivencias
+  int<lower=0> density[N];   // Densidad
+}
+
+parameters {
+  real a_tank;                    // Media del efecto aleatorio
+  real<lower=0> sigma_tank;       // Desviación estándar del efecto aleatorio
+  real a_tank_raw[N];// Efecto aleatorio específico de cada tanque (no centrado)
+}
+
+transformed parameters {
+  real<lower=0,upper=1> p[N]; // Probabilidad de supervivencia transformada
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_raw[i]);
+}
+
+model {
+  // Prior
+  a_tank ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+
+  // Efecto aleatorio específico de cada tanque (no centrado)
+  for (i in 1:N)
+    a_tank_raw[i] ~ normal(a_tank, sigma_tank);
+
+  // Likelihood
+  for (i in 1:N)
+    surv[i] ~ binomial(density[i], p[i]);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[i]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+```
+
+```{r model2, echo=FALSE, include=FALSE}
+# Stan model code
+stan_code_2 <- '
+data {
+  int<lower=0> N;            // Número de observaciones
+  int<lower=0> tank[N];      // Identificador del tanque
+  int<lower=0> surv[N];      // Número de supervivencias
+  int<lower=0> density[N];   // Densidad
+}
+
+parameters {
+  real a_tank;                    // Media del efecto aleatorio
+  real<lower=0> sigma_tank;       // Desviación estándar del efecto aleatorio
+  real a_tank_raw[N];// Efecto aleatorio específico de cada tanque (no centrado)
+}
+
+transformed parameters {
+  real<lower=0,upper=1> p[N]; // Probabilidad de supervivencia transformada
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_raw[i]);
+}
+
+model {
+  // Prior
+  a_tank ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+
+  // Efecto aleatorio específico de cada tanque (no centrado)
+  for (i in 1:N)
+    a_tank_raw[i] ~ normal(a_tank, sigma_tank);
+
+  // Likelihood
+  for (i in 1:N)
+    surv[i] ~ binomial(density[i], p[i]);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_raw[i]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+'
+
+# Datos
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank
+)
+
+
+# Compilar el modelo
+stan_model <- stan_model(model_code = stan_code_2)
+
+# Ajustar el modelo a los datos
+fit_2 <- sampling(stan_model, data = data, iter = 4000, chains = 4)
+```
+
+Cabe mencionar que Cauchy permite la posibilidad de valores grandes para $sigma_{tank}$ si los datos sugieren que hay una gran variabilidad entre los tanques, lo que mejora la capacidad del modelo para ajustar los datos adecuadamente.Los resultados se encuentran en los anexos.
+
+Los traceplots de los parámetros se encuentran en la siguiente gráfica:
+
+```{r traceplot2, echo=FALSE}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_2)
+```
+
+Los traceplots de este modelo sugieren una convergencia adecuada, estacionariedad y un muestreo eficiente. El modelo captura explícitamente la variabilidad entre los tanques a través de los efectos aleatorios específicos de cada tanque y el parámetro $sigma_{tank}$. Los parámetros $a_{tank}$ y $sigma_{tank}$ parecen estar bien estimados y reflejan el efecto promedio y la variabilidad de los tanques, respectivamente. También observamos diferentes escalas en el eje Y, lo que refleja el rango de valores que cada parámetro ha tomado durante la simulación.
+
+Ahora, se extraen las muestras posteriores del modelo **`fit_2`** para calcular la mediana de los interceptos para cada tanque. Estos interceptos fueron transformados a probabilidades utilizando la función logística. Este proceso permitió estimar las probabilidades de supervivencia ajustadas para cada tanque en el estudio.
+
+```{r post2, echo=FALSE, include=FALSE}
+# extract Stan samples
+post_2 <- extract.samples(fit_2)
+# compute median intercept for each tank
+# also transform to probability with logistic
+d$propsurv.est <- logistic( apply( post_2$a_tank_raw , 2 , median ) )
+```
+
+Se comparan las proporciones de supervivencia observadas y las estimadas para cada tanque. Los puntos azules representan las proporciones observadas, mientras que los puntos rojos indican las estimaciones del modelo.
+
+```{r comp2, echo=FALSE}
+plot_2a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post_2$a_tank + post_2$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+```
+
+Aunque el modelo logra capturar algunos patrones generales en los datos, como la disminución de la supervivencia de los renacuajos a medida que aumenta el tamaño del tanque, hay discrepancias notables entre las proporciones de supervivencia observadas y las estimadas por el modelo en todas las categorías de tamaño de tanque. En los tanques pequeños, el modelo tiende a subestimar sistemáticamente las altas tasas de supervivencia observadas, lo que sugiere que no explica completamente algunos factores que mejoran la supervivencia en estos tanques.
+
+Para evaluar la variabilidad en la supervivencia de los tanques, se simuló la supervivencia en 8000 tanques nuevos. La siguiente gráfica muestra las distribuciones gaussianas de los log-odds de supervivencia para 100 muestras diferentes, lo cual permite visualizar la variabilidad en las estimaciones de log-odds de supervivencia entre los tanques simulados.
+
+```{r log_odds2, echo=FALSE}
+# Simular 8000 nuevos tanques
+set.seed(123)
+new_tanks <- 8000
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post_2$a_tank[i], sd = post_2$sigma_tank[i])
+  log_odds_survival[, i] = a_tank_sample
+}
+
+plot_2b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+Se muestra una mayor dispersión en los log-odds de supervivencia en comparación con el modelo sin varianza. La densidad se extiende más allá del rango \[-5, 5\], indicando que algunas observaciones tienen probabilidades de supervivencia significativamente distintas.
+
+Esta dispersión sugiere que al incluir la varianza entre tanques, el modelo captura mejor la variabilidad inherente en las probabilidades de supervivencia, reflejando las diferencias entre los tanques de manera más precisa.
+
+Finalmente, las distribuciones de log-odds de supervivencia fueron transformadas a probabilidades de supervivencia. La siguiente gráfica ilustra las densidades de estas probabilidades para 100 muestras diferentes, proporcionando una perspectiva clara de la distribución de las probabilidades de supervivencia en los tanques simulados.
+
+```{r survival_probs_2, echo=FALSE}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_2c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+En este gráfico, las probabilidades de supervivencia se distribuyen más uniformemente, aunque aún hay una acumulación significativa en torno a las probabilidades extremas (cerca de 0 y 1). Al considerar la varianza entre tanques, hay una mayor dispersión en las probabilidades de supervivencia.
+
+La inclusión de la varianza entre tanques proporciona una representación más detallada y diferenciada de las probabilidades de supervivencia entre las distintas observaciones.\
+
+\newpage
+
+## Modelo 3: Intercepto específico por tanque y tamaño CON calculo de la varianza entre tanques y tamaño
+
+Este es un modelo jerárquico con efectos específicos por tanque y por tamaño, permite estimar la probabilidad de supervivencia teniendo en cuenta tanto el efecto del tanque como el efecto del tamaño, considerando la variabilidad entre ambos.
+
+```{r diagraph3, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+grViz("
+digraph {
+  graph [rankdir = LR, margin = 0, pad = 0, nodesep = 0.1, ranksep = 0.1]
+  node [shape = plaintext]
+  T
+  S
+  edge [minlen = 3]
+  T -> P
+  S -> P
+}
+", engine = "dot")
+```
+
+Suponemos lo siguiente:
+
+1.  Variable respuesta:
+    -   $surv_i \sim \text{Binomial}(density_i, p_i)$, donde:
+        -   $surv_i$: número de supervivencias para la observación $i$
+        -   $density_i$: densidad de población (número de ensayos) para la observación $i$
+        -   $p_i$: probabilidad de supervivencia para la observación $i$
+2.  Función de enlace:
+    -   $\text{logit}(p_i) = a\_tank\_adjusted[tank[i]] + a\_size\_adjusted[size[i]]$, donde:
+        -   $a\_tank\_adjusted[tank[i]]$: efecto aleatorio ajustado del tanque correspondiente a la observación $i$
+        -   $a\_size\_adjusted[size[i]]$: efecto aleatorio ajustado del tamaño correspondiente a la observación $i$
+3.  Efectos aleatorios ajustados:
+    -   Para cada tanque: $a\_tank\_adjusted[i] = a\_tank + \sigma\_tank \cdot a\_tank\_raw[i]$
+    -   Para cada nivel de tamaño: $a\_size\_adjusted[i] = a\_size + \sigma\_size \cdot a\_size\_raw[i]$
+4.  Efectos aleatorios no centrados:
+    -   $a\_tank\_raw \sim \text{Normal}(0, 1)$
+    -   $a\_size\_raw \sim \text{Normal}(0, 1)$
+5.  Priors:
+    -   $a\_tank \sim \text{Normal}(0, 1)$
+    -   $a\_size \sim \text{Normal}(0, 1)$
+    -   $\sigma\_tank \sim \text{Cauchy}(0, 1)$
+    -   $\sigma\_size \sim \text{Cauchy}(0, 1)$
+
+Estos supuestos implican que:
+
+-   La variable de respuesta $surv_i$ sigue una distribución binomial, donde el número de ensayos está determinado por la densidad de población $density_i$ y la probabilidad de éxito (supervivencia) $p_i$ varía según los efectos aleatorios ajustados del tanque y el tamaño.
+
+-   La probabilidad de supervivencia $p_i$ está relacionada con la suma de los efectos aleatorios ajustados del tanque y el tamaño correspondientes a la observación $i$ a través de una función de enlace logit.
+
+-   Los efectos aleatorios ajustados se obtienen a partir de los efectos aleatorios no centrados multiplicados por sus respectivas desviaciones estándar y sumados a las medias de los efectos aleatorios.
+
+-   Los efectos aleatorios no centrados siguen una distribución normal estándar.
+
+-   Las medias de los efectos aleatorios ($a\_tank$ y $a\_size$) tienen una distribución normal prior con media 0 y desviación estándar 1.
+
+-   Las desviaciones estándar de los efectos aleatorios ($\sigma\_tank$ y $\sigma\_size$) tienen una distribución Cauchy prior con ubicación 0 y escala 1.
+
+El modelo es el siguiente:
+
+``` text
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], 
+    a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+```
+
+```{r model3, echo=FALSE, include=FALSE}
+stan_code_3 <- '
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+'
+
+# Data
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank,
+  size = as.integer(d$size == "big") + 1  # Convert "big" to 1 and "small" to 2
+)
+
+# Compile the model
+stan_model <- stan_model(model_code = stan_code_3)
+
+# Fit the model to the data with higher adapt_delta
+fit_3 <- sampling(stan_model, data = data, iter = 4000, chains = 4, 
+                control = list(adapt_delta = 0.99))
+```
+
+Los resultados se encuentran en los anexos.
+
+Los traceplots de los parámetros se encuentran en la siguiente gráfica:
+
+```{r traceplot3, echo=FALSE}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_3)
+```
+
+El traceplot no muestra evidencias de problemas de convergencia o de muestreo para los parámetros clave del modelo. Las trazas parecen estables, bien mezcladas y consistentes con las especificaciones del modelo. Esto sugiere que las cadenas MCMC han explorado adecuadamente el espacio de parámetros posterior y han alcanzado la distribución estacionaria.
+
+Ahora, se extraen las muestras posteriores del modelo **`fit_3`** para calcular la mediana de los interceptos para cada tanque. Estos interceptos fueron transformados a probabilidades utilizando la función logística. Este proceso permitió estimar las probabilidades de supervivencia ajustadas para cada tanque en el estudio.
+
+```{r post3, echo=FALSE, include=FALSE}
+# Extraer muestras de Stan
+post_3 <- extract.samples(fit_3)
+
+# Calcular la estimación combinada para cada observación
+# Aquí se utilizan tanto el efecto aleatorio del tanque como del tamaño
+d$propsurv.est <- apply(post_3$a_tank_adjusted, 2, median) + 
+  apply(post_3$a_size_adjusted, 2, median)[d$size]
+
+# Transformar a probabilidad utilizando la función logística
+d$propsurv.est <- logistic(d$propsurv.est)
+```
+
+Ahora se comparan las proporciones de supervivencia observadas y las estimadas para cada tanque. Los puntos azules representan las proporciones observadas, mientras que los puntos rojos indican las estimaciones del modelo.
+
+```{r comp3, echo=FALSE}
+plot_3a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post_3$a_tank + post_3$a_size)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+```
+
+La gráfica ilustra claramente el efecto del tamaño del tanque en la supervivencia de los renacuajos, con tanques más pequeños asociados a una mayor supervivencia en promedio. También destaca la variabilidad sustancial entre tanques individuales, que el modelo captura en cierta medida. Si bien el modelo se ajusta razonablemente bien en general, hay cierta incertidumbre en las estimaciones para algunos tanques.
+
+Para evaluar la variabilidad en la supervivencia de los tanques, se simuló la supervivencia en 8000 tanques nuevos. La siguiente gráfica muestra las distribuciones gaussianas de los log-odds de supervivencia para 100 muestras diferentes, lo cual permite visualizar la variabilidad en las estimaciones de log-odds de supervivencia entre los tanques simulados.
+
+```{r log_odds3, echo=FALSE}
+# Simular 8000 nuevos tanques con tamaños aleatorios
+set.seed(123)
+new_tanks <- 8000
+new_sizes <- sample(1:2, new_tanks, replace = TRUE)
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post_3$a_tank[i], sd = post_3$sigma_tank[i])
+  a_size_sample <- rnorm(new_tanks, mean = post_3$a_size[i], sd = post_3$sigma_size[i])
+  log_odds_survival[, i] <- a_tank_sample + a_size_sample[new_sizes]
+}
+
+plot_3b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+La densidad de los log-odds muestran una mayor dispersión en comparación con los modelos anteriores. Se observa una distribución más amplia y dispersa, indicando que la inclusión de múltiples fuentes de variabilidad (tanques y tamaños) captura más complejidad en los datos.
+
+Por último, las distribuciones de log-odds de supervivencia fueron transformadas a probabilidades de supervivencia. La siguiente gráfica ilustra las densidades de estas probabilidades para 100 muestras diferentes, proporcionando una perspectiva clara de la distribución de las probabilidades de supervivencia en los tanques simulados.
+
+```{r survival_probs_3, echo=FALSE}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_3c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+La densidad en los extremos sigue siendo alta, pero se observa una mayor dispersión en el rango medio. La inclusión de la varianza tanto entre tanques como entre tamaños permite capturar más heterogeneidad en las probabilidades de supervivencia.
+
+\newpage
+
+## Modelo 4: Intercepto específico por tanque, tamaño y presencia de depredadores CON cálculo de la varianza entre tanques, tamaño y presencia de depredadores
+
+Este modelo permite capturar la variabilidad debida a los tanques, tamaños y presencia de depredadores, proporcionando una estimación más robusta y realista de los efectos sobre la supervivencia.
+
+```{r diagraph4, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+grViz("
+digraph {
+  graph [rankdir = LR, margin = 0, pad = 0, nodesep = 0.1, ranksep = 0.1]
+  node [shape = plaintext]
+  T
+  S
+  D
+  edge [minlen = 3]
+  T -> P
+  S -> P
+  D -> P
+}
+", engine = "dot")
+```
+
+Suponemos lo siguiente:
+
+1.  Variable respuesta:
+    -   $surv_i \sim \text{Binomial}(density_i, p_i)$, donde:
+        -   $surv_i$: número de supervivencias para la observación $i$
+        -   $density_i$: densidad de población (número de ensayos) para la observación $i$
+        -   $p_i$: probabilidad de supervivencia para la observación $i$
+2.  Función de enlace:
+    -   $\text{logit}(p_i) = a\_tank\_adjusted[tank[i]] + a\_size\_adjusted[size[i]] + a\_pred\_adjusted[pred[i]]$, donde:
+        -   $a\_tank\_adjusted[tank[i]]$: efecto aleatorio ajustado del tanque correspondiente a la observación $i$
+        -   $a\_size\_adjusted[size[i]]$: efecto aleatorio ajustado del tamaño correspondiente a la observación $i$
+        -   $a\_pred\_adjusted[pred[i]]$: efecto aleatorio ajustado de la presencia de depredadores correspondiente a la observación $i$
+3.  Efectos aleatorios ajustados:
+    -   Para cada tanque: $a\_tank\_adjusted[i] = a\_tank + \sigma\_tank \cdot a\_tank\_raw[i]$
+    -   Para cada nivel de tamaño: $a\_size\_adjusted[i] = a\_size + \sigma\_size \cdot a\_size\_raw[i]$
+    -   Para cada nivel de presencia de depredadores: $a\_pred\_adjusted[i] = a\_pred + \sigma\_pred \cdot a\_pred\_raw[i]$
+4.  Efectos aleatorios no centrados:
+    -   $a\_tank\_raw \sim \text{Normal}(0, 1)$
+    -   $a\_size\_raw \sim \text{Normal}(0, 1)$
+    -   $a\_pred\_raw \sim \text{Normal}(0, 1)$
+5.  Priors:
+    -   $a\_tank \sim \text{Normal}(0, 1)$
+    -   $a\_size \sim \text{Normal}(0, 1)$
+    -   $a\_pred \sim \text{Normal}(0, 1)$
+    -   $\sigma\_tank \sim \text{Cauchy}(0, 1)$
+    -   $\sigma\_size \sim \text{Cauchy}(0, 1)$
+    -   $\sigma\_pred \sim \text{Cauchy}(0, 1)$
+
+Estos supuestos implican que:
+
+-   La variable de respuesta $surv_i$ sigue una distribución binomial, donde el número de ensayos está determinado por la densidad de población $density_i$ y la probabilidad de éxito (supervivencia) $p_i$ varía según los efectos aleatorios ajustados del tanque, el tamaño y la presencia de depredadores.
+
+-   La probabilidad de supervivencia $p_i$ está relacionada con la suma de los efectos aleatorios ajustados del tanque, el tamaño y la presencia de depredadores correspondientes a la observación $i$ a través de una función de enlace logit.
+
+-   Los efectos aleatorios ajustados se obtienen a partir de los efectos aleatorios no centrados multiplicados por sus respectivas desviaciones estándar y sumados a las medias de los efectos aleatorios.
+
+-   Los efectos aleatorios no centrados siguen una distribución normal estándar.
+
+-   Las medias de los efectos aleatorios ($a\_tank$, $a\_size$ y $a\_pred$) tienen una distribución normal prior con media 0 y desviación estándar 1.
+
+-   Las desviaciones estándar de los efectos aleatorios ($\sigma\_tank$, $\sigma\_size$ y $\sigma\_pred$) tienen una distribución Cauchy prior con ubicación 0 y escala 1.
+
+El modelo es el siguiente:
+
+``` text
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+  int<lower=1, upper=2> pred[N];// Size identifier:1 for "no" and 2 for "pred" 
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real a_pred;                    // Mean of the random effect for predator
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  real<lower=0> sigma_pred;  // Standard deviation of the random effect for pred
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+  vector[2] a_pred_raw;   // Raw random effect for each pred level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real a_pred_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+  for (i in 1:2)
+    a_pred_adjusted[i] = a_pred + sigma_pred * a_pred_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + 
+    a_pred_adjusted[pred[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  a_pred ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+  sigma_pred ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+  a_pred_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], 
+    a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + a_pred_adjusted[pred[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+```
+
+```{r model4, echo=FALSE, include=FALSE}
+stan_code_4 <- '
+data {
+  int<lower=0> N;            // Number of observations
+  int<lower=0> tank[N];      // Tank identifier
+  int<lower=0> surv[N];      // Number of survivals
+  int<lower=0> density[N];   // Density
+  int<lower=1, upper=2> size[N];// Size identifier:1 for "big" and 2 for "small"
+  int<lower=1, upper=2> pred[N];// Size identifier:1 for "no" and 2 for "pred" 
+}
+
+parameters {
+  real a_tank;                    // Mean of the random effect for tank
+  real a_size;                    // Mean of the random effect for size
+  real a_pred;                    // Mean of the random effect for predator
+  real<lower=0> sigma_tank;  // Standard deviation of the random effect for tank
+  real<lower=0> sigma_size;  // Standard deviation of the random effect for size
+  real<lower=0> sigma_pred;  // Standard deviation of the random effect for pred
+  vector[N] a_tank_raw;      // Raw random effect for each tank (non-centered)
+  vector[2] a_size_raw;   // Raw random effect for each size level(non-centered)
+  vector[2] a_pred_raw;   // Raw random effect for each pred level(non-centered)
+}
+
+transformed parameters {
+  real a_tank_adjusted[N];   // Adjusted random effect for each tank
+  real a_size_adjusted[2];   // Adjusted random effect for each size
+  real a_pred_adjusted[2];   // Adjusted random effect for each size
+  real<lower=0, upper=1> p[N]; // Transformed survival probability
+
+  for (i in 1:N)
+    a_tank_adjusted[i] = a_tank + sigma_tank * a_tank_raw[i];
+  for (i in 1:2)
+    a_size_adjusted[i] = a_size + sigma_size * a_size_raw[i];
+  for (i in 1:2)
+    a_pred_adjusted[i] = a_pred + sigma_pred * a_pred_raw[i];
+
+  for (i in 1:N)
+    p[i] = inv_logit(a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + a_pred_adjusted[pred[i]]);
+}
+
+model {
+  // Priors
+  a_tank ~ normal(0, 1);
+  a_size ~ normal(0, 1);
+  a_pred ~ normal(0, 1);
+  sigma_tank ~ cauchy(0, 1);
+  sigma_size ~ cauchy(0, 1);
+  sigma_pred ~ cauchy(0, 1);
+
+  // Non-centered parameterization
+  a_tank_raw ~ normal(0, 1);
+  a_size_raw ~ normal(0, 1);
+  a_pred_raw ~ normal(0, 1);
+
+  // Likelihood
+  surv ~ binomial(density, p);
+}
+
+generated quantities {
+  vector[N] log_lik;
+  real deviance;
+  
+  for (i in 1:N) {
+    log_lik[i] = binomial_logit_lpmf(surv[i] | density[i], a_tank_adjusted[tank[i]] + a_size_adjusted[size[i]] + a_pred_adjusted[pred[i]]);
+  }
+  
+  deviance = -2 * sum(log_lik);
+}
+'
+
+# Data
+data <- list(
+  N = nrow(d),
+  density = d$density,
+  surv = d$surv,
+  tank = d$tank,
+  size = as.integer(d$size == "big") + 1,  # Convert "big" to 1 and "small" to 2
+  pred = as.integer(d$pred == "no") + 1  # Convert "no" to 1 and "pred" to 2
+)
+
+# Compile the model
+stan_model <- stan_model(model_code = stan_code_4)
+
+# Fit the model to the data with higher adapt_delta
+fit_4 <- sampling(stan_model, data = data, iter = 3500, chains = 4, 
+                control = list(adapt_delta = 0.99))
+```
+
+Los resultados se encuentran en los anexos.
+
+Los traceplots de los parámetros se encuentran en la siguiente gráfica:
+
+```{r traceplot4, echo=FALSE}
+# Generar traceplots para todos los parámetros
+stan_trace(fit_4)
+```
+
+El traceplot no muestra evidencias de problemas de convergencia para los parámetros clave del modelo. Las trazas exhiben un buen comportamiento de mezcla, estacionariedad y consistencia entre cadenas. Esto sugiere que las cadenas MCMC han explorado adecuadamente el espacio de parámetros posterior y han alcanzado la distribución estacionaria.
+
+Ahora, se extraen las muestras posteriores del modelo **`fit_4`** para calcular la mediana de los interceptos para cada tanque. Estos interceptos fueron transformados a probabilidades utilizando la función logística. Este proceso permitió estimar las probabilidades de supervivencia ajustadas para cada tanque en el estudio.
+
+```{r post4, echo=FALSE, include=FALSE}
+# Extraer muestras de Stan
+post_4 <- extract.samples(fit_4)
+
+# Calcular la estimación combinada para cada observación
+# Aquí se utilizan tanto el efecto aleatorio del tanque como del tamaño
+d$propsurv.est <- apply(post_4$a_tank_adjusted, 2, median) + 
+  apply(post_4$a_size_adjusted, 2, median)[d$size] +
+  apply(post_4$a_pred_adjusted, 2 ,median)[d$pred]
+
+# Transformar a probabilidad utilizando la función logística
+d$propsurv.est <- logistic(d$propsurv.est)
+```
+
+Ahora se comparan las proporciones de supervivencia observadas y las estimadas para cada tanque. Los puntos azules representan las proporciones observadas, mientras que los puntos rojos indican las estimaciones del modelo.
+
+```{r comp4, echo=FALSE}
+plot_4a <- {
+  # Visualizar las proporciones de supervivencia observadas y estimadas
+  plot(d$propsurv, ylim=c(0,1), pch=16, xaxt="n", xlab="tank", 
+       ylab="proportion survival", col="blue")
+  axis(1, at=seq(1, length(unique(d$tank)), by=1), labels=unique(d$tank))
+  points(d$propsurv.est, col="red")
+  
+  # Marcar la mediana de la probabilidad de supervivencia ajustada en todos los tanques
+  abline(h=logistic(median(post_4$a_tank + post_4$a_size + post_4$a_pred)), lty=2)
+  
+  # Dibujar divisores verticales entre los tamaños de tanque
+  abline(v=c(16.5, 32.5), lwd=0.5)
+  text(8, 0, "small tanks")
+  text(24, 0, "medium tanks")
+  text(40, 0, "large tanks")
+}
+```
+
+El modelo captura estos efectos principales y se ajusta razonablemente bien a los datos, aunque todavía hay variabilidad entre tanques que podría no ser completamente explicada. Estos resultados respaldan la inclusión de efectos de tamaño, depredador y tanque en el modelo, y sugieren que el modelo podría beneficiarse de considerar una interacción tamaño-depredador.
+
+Para evaluar la variabilidad en la supervivencia de los tanques, se simuló la supervivencia en 8000 tanques nuevos. La siguiente gráfica muestra las distribuciones gaussianas de los log-odds de supervivencia para 100 muestras diferentes, lo cual permite visualizar la variabilidad en las estimaciones de log-odds de supervivencia entre los tanques simulados.
+
+```{r log_odds4, echo=FALSE}
+# Simular 8000 nuevos tanques con tamaños aleatorios
+set.seed(123)
+new_tanks <- 8000
+new_sizes <- sample(1:2, new_tanks, replace = TRUE)
+new_preds <- sample(1:2, new_tanks, replace = TRUE)
+
+# Calcular log-odds de supervivencia para estos tanques
+log_odds_survival <- matrix(NA, nrow=new_tanks, ncol=100)
+for (i in 1:100) {
+  a_tank_sample <- rnorm(new_tanks, mean = post_4$a_tank[i], sd = post_4$sigma_tank[i])
+  a_size_sample <- rnorm(new_sizes, mean = post_4$a_size[i], sd = post_4$sigma_size[i])
+  a_pred_sample <- rnorm(new_preds, mean = post_4$a_pred[i], sd = post_4$sigma_pred[i])
+  log_odds_survival[, i] <- a_tank_sample + a_size_sample[new_sizes] + a_pred_sample[new_preds]
+}
+
+plot_4b <- {
+  # Graficar 100 distribuciones Gaussianas de los log-odds de supervivencia
+  par(mfrow = c(1, 1))
+  plot(density(log_odds_survival[, 1]), xlim = range(log_odds_survival), 
+       ylim = c(0, 0.5), main = "Log-Odds of Survival", 
+       xlab = "Log-Odds", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(log_odds_survival[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+**Distribución de la Densidad**: La gráfica muestra múltiples picos en la distribución de los log-odds de supervivencia. Los log-odds se distribuyen principalmente alrededor de 0, pero también hay log-odds positivos y negativos significativos, indicando variabilidad considerable.
+
+**Curva de Log-Odds**: La varianza entre tanques, tamaños y depredadores genera una dispersión significativa en los log-odds, lo que sugiere que estos factores tienen un impacto considerable en las probabilidades de supervivencia.
+
+Finalmente, las distribuciones de log-odds de supervivencia fueron transformadas a probabilidades de supervivencia. La siguiente gráfica ilustra las densidades de estas probabilidades para 100 muestras diferentes, proporcionando una perspectiva clara de la distribución de las probabilidades de supervivencia en los tanques simulados.
+
+```{r survival_probs_4, echo=FALSE}
+# Transformar log-odds a probabilidades de supervivencia
+survival_probabilities <- logistic(log_odds_survival)
+
+plot_4c <- {
+  # Graficar las probabilidades de supervivencia
+  plot(density(survival_probabilities[, 1]), xlim = c(0, 1), ylim = c(0, 10), 
+       main = "Survival Probabilities", xlab = "Probability", ylab = "Density")
+  for (i in 2:100) {
+    lines(density(survival_probabilities[, i]), col = rgb(0, 0, 1, 0.1))
+  }
+}
+```
+
+**Distribución de la Densidad**:La gráfica muestra una alta densidad de probabilidades de supervivencia cercanas a 0 y 1, indicando que muchas observaciones tienen una probabilidad de supervivencia muy baja o muy alta. La densidad intermedia (entre 0.1 y 0.9) es relativamente baja, lo que sugiere que menos observaciones caen en este rango de probabilidad.
+
+**Curva de Supervivencia**: Hay una concentración significativa hacia los extremos, lo que sugiere que la inclusión de varianza entre tanques, tamaños y depredadores permite capturar la variabilidad extrema en las probabilidades de supervivencia.
+
+\newpage
+
+# Comparación de modelos y conclusiones
+
+El DIC (Deviance Information Criterion) es una medida estadística utilizada para la comparación de modelos en un contexto bayesiano. Al igual que otros criterios de información, como el AIC (Akaike Information Criterion) y el BIC (Bayesian Information Criterion), el DIC evalúa la calidad de ajuste del modelo penalizando la complejidad del mismo.
+
+### Concepto del DIC
+
+El DIC fue introducido por Spiegelhalter et al. (2002) y es particularmente útil en el contexto de modelos bayesianos, donde se utilizan métodos de simulación como MCMC (Monte Carlo Markov Chains) para obtener distribuciones posteriores de los parámetros del modelo.
+
+### Cálculo del DIC
+
+El DIC se calcula utilizando dos componentes principales:
+
+1.  **Deviance Media (**$\bar{D}$): Es la media de la deviance sobre las muestras de la distribución posterior. La deviance para una observación ($i$) se define como:
+
+    $$
+    D(\theta) = -2 \log p(y | \theta) + C
+    $$
+
+    donde $p(y | \theta)$ es la verosimilitud del modelo y $C$ es una constante que se cancela al comparar modelos, por lo que puede ser ignorada.
+
+2.  **Complejidad del Modelo (**$pD$): Es una medida de la complejidad del modelo, definida como la diferencia entre la deviance media y la deviance evaluada en la media posterior de los parámetros ($\hat{\theta}$):
+
+    $$
+    pD = \bar{D} - D(\hat{\theta}
+    $$
+
+    donde $\hat{\theta}$ es la media posterior de los parámetros.
+
+Usando estos componentes, el DIC se calcula como:
+
+$$ 
+DIC = \bar{D} + pD
+$$Esta fórmula muestra claramente cómo el DIC penaliza la complejidad del modelo ($pD$) además de considerar la calidad del ajuste ($\bar{D}$).
+
+### Interpretación del DIC
+
+Un modelo con un menor DIC es preferido sobre un modelo con un mayor DIC, ya que indica un mejor balance entre ajuste y complejidad. Es importante notar que el DIC, al igual que otros criterios de información, debe ser utilizado para comparar modelos que están ajustados a los mismos datos. No proporciona una medida absoluta de la calidad del modelo.
+
+```{r comp_mod}
+# Extraer las muestras del ajuste del modelo usando rstan::extract
+samples <- rstan::extract(fit_1)
+
+# Extraer las devianzas
+deviance_samples <- samples$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar <- mean(deviance_samples)
+
+# Calcular la devianza del valor esperado de los parámetros posteriori
+a_tank_raw_mean <- apply(samples$a_tank_raw, 2, mean)
+
+# Calcular la log-verosimilitud del valor esperado de los parámetros
+log_lik_mean <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  # Calcular la probabilidad predicha usando el valor medio de a_tank_raw
+  p_mean <- 1 / (1 + exp(-a_tank_raw_mean[data$tank[i]]))
+  # Calcular la log-verosimilitud
+  log_lik_mean[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar <- -2 * sum(log_lik_mean)
+
+# Calcular DIC
+DIC_1 <- 2 * D_bar - D_theta_bar
+
+# Extraer muestras del ajuste del modelo
+samples_2 <- rstan::extract(fit_2)
+
+# Extraer las devianzas
+deviance_samples_2 <- samples_2$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_2 <- mean(deviance_samples_2)
+
+# Calcular la devianza del valor esperado de los parámetros posteriori
+a_tank_raw_mean_2 <- apply(samples_2$a_tank_raw, 2, mean)
+log_lik_mean_2 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-a_tank_raw_mean_2[i]))
+  log_lik_mean_2[i] <- dbinom(data$surv[i], size = data$density[i], 
+                              prob = p_mean, log = TRUE)
+}
+D_theta_bar_2 <- -2 * sum(log_lik_mean_2)
+
+# Calcular DIC
+DIC_2 <- 2 * D_bar_2 - D_theta_bar_2
+
+# Extraer muestras del ajuste del modelo
+samples_3 <- rstan::extract(fit_3)
+
+# Extraer las devianzas
+deviance_samples_3 <- samples_3$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_3 <- mean(deviance_samples_3)
+
+# Calcular la devianza del valor esperado de los parámetros posteriores
+a_tank_adjusted_mean_3 <- apply(samples_3$a_tank_adjusted, 2, mean)
+a_size_adjusted_mean_3 <- apply(samples_3$a_size_adjusted, 2, mean)
+log_lik_mean_3 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-(a_tank_adjusted_mean_3[data$tank[i]] + a_size_adjusted_mean_3[data$size[i]])))
+  log_lik_mean_3[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar_3 <- -2 * sum(log_lik_mean_3)
+
+# Calcular DIC
+DIC_3 <- 2 * D_bar_3 - D_theta_bar_3
+
+# Extraer muestras del ajuste del modelo
+samples_4 <- rstan::extract(fit_4)
+
+# Extraer las devianzas
+deviance_samples_4 <- samples_4$deviance
+
+# Calcular el valor esperado de la devianza (D_bar)
+D_bar_4 <- mean(deviance_samples_4)
+
+# Calcular la devianza del valor esperado de los parámetros posteriores
+a_tank_adjusted_mean_4 <- apply(samples_4$a_tank_adjusted, 2, mean)
+a_size_adjusted_mean_4 <- apply(samples_4$a_size_adjusted, 2, mean)
+a_pred_adjusted_mean_4 <- apply(samples_4$a_pred_adjusted, 2, mean)
+log_lik_mean_4 <- numeric(length(data$surv))
+for (i in 1:data$N) {
+  p_mean <- 1 / (1 + exp(-(a_tank_adjusted_mean_4[data$tank[i]] + a_size_adjusted_mean_4[data$size[i]]+ a_pred_adjusted_mean_4[data$pred[i]])))
+  log_lik_mean_4[i] <- dbinom(data$surv[i], size = data$density[i], prob = p_mean, log = TRUE)
+}
+D_theta_bar_4 <- -2 * sum(log_lik_mean_4)
+
+# Calcular DIC
+DIC_4 <- 2 * D_bar_4 - D_theta_bar_4
+
+# Crear un data frame con los valores de DIC y el modelo correspondiente
+dic_data_1 <- data.frame(
+  Modelo = c("Modelo 1", "Modelo 2", "Modelo 3", "Modelo 4"),
+  DIC = c(DIC_1, DIC_2, DIC_3, DIC_4)
+)
+
+# Graficar los valores de DIC
+ggplot(dic_data_1, aes(x = Modelo, y = DIC, fill = Modelo)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = round(DIC, 2)), vjust = -0.5) +
+  labs(title = "Comparación de DIC entre modelos",
+       x = "Modelo",
+       y = "DIC") +
+  theme_minimal()
+```
+
+1.  **Modelo 1 tiene el mayor valor de DIC**: Esto indica que este modelo tiene el peor ajuste entre los cuatro modelos comparados. La gran diferencia en el valor de DIC sugiere que no captura adecuadamente la variabilidad en los datos.
+
+2.  **Modelo 2 y Modelo 3 tienen valores de DIC muy similares**: Ambos modelos incluyen varianza entre tanques y tamaños, respectivamente, lo que mejora significativamente el ajuste en comparación con el Modelo 1. La similitud en sus valores de DIC sugiere que agregar el tamaño no aporta una mejora significativa adicional cuando ya se considera la varianza entre tanques.
+
+3.  **Modelo 4 tiene el valor de DIC más bajo**: Este modelo incluye varianza entre tanques, tamaños y presencia de depredadores. La reducción en el valor de DIC indica que este modelo proporciona el mejor ajuste a los datos, capturando más complejidad y variabilidad en los factores que afectan la supervivencia.
+
+### **Recomendaciones**
+
+-   **Utilizar el Modelo 4**: Dado que tiene el valor de DIC más bajo, se recomienda utilizar el Modelo 4 para hacer inferencias y predicciones, ya que es el que mejor se ajusta a los datos y captura la variabilidad relevante en los factores considerados.
+
+-   **Considerar la Complejidad del Modelo**: Aunque el Modelo 4 es el mejor en términos de ajuste, también es el más complejo. Es importante equilibrar la complejidad del modelo con la interpretabilidad y el costo computacional, especialmente si se va a implementar en un entorno de producción.
+
+### **Siguiente Pasos**
+
+1.  **Validación del Modelo 4**: Realizar una validación cruzada para confirmar la robustez del modelo y asegurar que no está sobre-ajustado a los datos de entrenamiento.
+
+2.  **Interpretación de Parámetros**: Analizar los parámetros del Modelo 4 para entender cómo cada factor (tanque, tamaño, presencia de depredadores) afecta la probabilidad de supervivencia.
+
+3.  **Predicción y Aplicación**: Utilizar el Modelo 4 para realizar predicciones y aplicar los resultados a la toma de decisiones en el contexto del estudio o proyecto en curso.
+
+\newpage
+
+# Anexos
+
+## Modelo 1: Intercepto específico por tanque SIN cálculo de varianza entre tanques
+
+Resultados del modelo
+
+```{r resultados1, echo=FALSE}
+print(fit_1)
+```
+
+## Modelo 2: Intercepto específico por tanque CON calculo de varianza entre tanques
+
+Resultados del modelo
+
+```{r resultados2, echo=FALSE}
+print(fit_2)
+```
+
+## Modelo 3: Intercepto específico por tanque y tamaño CON calculo de la varianza entre tanques y tamaño
+
+Resultados del modelo
+
+```{r resultados3, echo=FALSE}
+print(fit_3)
+```
+
+## Modelo 4: Intercepto específico por tanque, tamaño y presencia de depredadores CON cálculo de la varianza entre tanques, tamaño y presencia de depredadores
+
+Resultados del modelo
+
+```{r resultados4, echo=FALSE}
+print(fit_4)
+```
